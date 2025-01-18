@@ -1,77 +1,102 @@
 #include <cctype>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
+#include <filesystem>
 
 #include "lib/nlohmann/json.hpp"
 
 using json = nlohmann::json;
 
-std::tuple<std::string, json> decode_bencoded_value(const std::string &encoded_value)
+json decode_bencoded_value(const std::string &encoded_value, int &id);
+
+json decode_int(const std::string encoded_value , int &id)
+{   //  i-14e -> -14 , i52e --> 52
+    id ++;
+    std::string result;
+    while (encoded_value[id] != 'e')
+    {
+        result += encoded_value[id];
+        id ++;
+    }
+    id++; // move from e
+    return json(std::atoll(result.c_str()));
+}
+
+json decode_dict(const std::string &encoded_value, int &id)
 {
-    if (std::isdigit(encoded_value[0]))
-    {
-        // Example: "5:hello" -> "hello"
-        size_t colon_index = encoded_value.find(':');
-        if (colon_index != std::string::npos)
-        {
-            std::string number_string = encoded_value.substr(0, colon_index);
-            int64_t number = std::atoll(number_string.c_str());
-            std::string str = encoded_value.substr(colon_index + 1, number);
+    id++;
+    json result = json::object();
 
-            return std::make_tuple(encoded_value.substr(colon_index + 1 + number), json(str));
-        }
-        else
-        {
-            throw std::runtime_error("Invalid encoded value: " + encoded_value);
-        }
-    }
-    else if (encoded_value[0] == 'i' && encoded_value[encoded_value.size() - 1] == 'e')
+    while ( encoded_value[id] != 'e')
     {
-        // Example: "i42e" -> 42 , i-42e -> -4
-        size_t e_index = encoded_value.find('e');
-        if (e_index == std::string::npos)
-        {
-            throw std::runtime_error("Invalid encoded value: " + encoded_value);
-        }
-        std::string number_string = encoded_value.substr(1, e_index - 1);
-        int64_t number = std::strtoll(number_string.c_str(), nullptr, 10);
-        return std::make_tuple(encoded_value.substr(e_index + 1), json(number));
+        json key = decode_bencoded_value(encoded_value ,  id );
+        // id is a reference , it will be updated with calls
+        json value = decode_bencoded_value(encoded_value , id);
+        result[key.get<std::string>()] = value;
     }
-    else if (encoded_value[0] == 'l' && encoded_value[encoded_value.size() - 1] == 'e')
+    id ++;
+    return result;
+}
+
+json decode_list( const std::string &encoded_value, int &id )
+{
+    id++;
+    json result = json::array();
+    while (encoded_value[id] != 'e')
     {
-        json array = json::array();
-
-        std::string rest = encoded_value.substr(1);
-
-        while (rest[0] != 'e')
-        {
-            json value;
-            std::tie(rest, value) = decode_bencoded_value(rest);
-            array.push_back(value);
-        }
-        return std::make_tuple(rest.substr(1), array);
+        result.push_back(decode_bencoded_value(encoded_value, id));
     }
-    else if (encoded_value[0] == 'd' && encoded_value[encoded_value.size() - 1] == 'e')
+    id++;
+    return result;
+}
+
+json decode_str(const std::string &encoded_value, int &id )
+{
+    std::string result;
+    while (isdigit(encoded_value[id]))
     {
-        json obj = json::object();
-        std::string rest = encoded_value.substr(1);
-        while (rest[0] != 'e')
-        {
-            json key, value;
-            std::tie(rest, key) = decode_bencoded_value(rest);
-            std::tie(rest , value) = decode_bencoded_value(rest);
-            obj[key.get<std::string>()] = value;
-        }
-        return std::make_tuple(rest.substr(1), obj);
+        result += encoded_value[id];
+        id++;
     }
+    int length = std::atoll(result.c_str());
+    result = "";
+    id++;
+    while (length--)
+    {
+        result += encoded_value[id];
+        id++;
+    }
+    return result;
+}
 
+json decode_bencoded_value(const std::string &encoded_value, int &id)
+{
+
+    if (encoded_value[id] == 'i')
+    {
+        return decode_int(encoded_value, id);
+    }
+    else if (encoded_value[id] == 'd')
+    {
+        return decode_dict(encoded_value, id);
+    }
+    else if (encoded_value[id] == 'l')
+    {
+        return decode_list(encoded_value, id);
+    }
+    else if (isdigit(encoded_value[id]))
+    {
+        return decode_str(encoded_value, id);
+    }
     else
     {
-        throw std::runtime_error("Unhandled encoded value: " + encoded_value);
+        throw std::runtime_error("Invalid encoded value: " + encoded_value + " at index: " + std::to_string(id));
     }
 }
+
 
 int main(int argc, char *argv[])
 {
@@ -101,12 +126,40 @@ int main(int argc, char *argv[])
         // Uncomment this block to pass the first stage
         std::string encoded_value = argv[2];
         json decoded_value;
-        std::string actual_string;
-        std::tie(actual_string, decoded_value) = decode_bencoded_value(encoded_value);
+        int id = 0;
 
-        std::cout << actual_string << '\n';
+        decoded_value = decode_bencoded_value(encoded_value , id );
 
         std::cout << decoded_value.dump() << std::endl;
+    }
+    else if (command == "info")
+    {
+        std::string filePath = argv[2];
+        std::ifstream file(filePath, std::ios::binary);
+
+        if (!std::filesystem::exists(filePath)) {
+            std::cerr << "File does not exist: " << filePath << '\n';
+            return 1;
+        }
+
+
+        if (!file.is_open()) {
+            std::cerr << "Error: Could not open file " << filePath << '\n';
+            return 1;
+        }
+
+        std::string encode_file_content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+
+        if (file.fail() && !file.eof()) {
+            std::cerr << "Error: Failed to read the file " << filePath << '\n';
+            return 1;
+        }
+
+        int id = 0;
+
+        json decoded_value = decode_bencoded_value(encode_file_content , id);
+        std::cout << "Tracker URL: " << decoded_value["announce"].get<std::string>() << std::endl;
+        std::cout << "Length: " << decoded_value["info"]["length"].get<int>() << std::endl;
     }
     else
     {
