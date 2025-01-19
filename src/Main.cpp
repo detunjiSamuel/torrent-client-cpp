@@ -1,25 +1,26 @@
 #include <cctype>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
-#include <filesystem>
 
 #include "lib/nlohmann/json.hpp"
+#include "lib/sha1.hpp"
 
 using json = nlohmann::json;
 
 json decode_bencoded_value(const std::string &encoded_value, int &id);
 
-json decode_int(const std::string encoded_value , int &id)
-{   //  i-14e -> -14 , i52e --> 52
-    id ++;
+json decode_int(const std::string encoded_value, int &id)
+{ //  i-14e -> -14 , i52e --> 52
+    id++;
     std::string result;
     while (encoded_value[id] != 'e')
     {
         result += encoded_value[id];
-        id ++;
+        id++;
     }
     id++; // move from e
     return json(std::atoll(result.c_str()));
@@ -30,18 +31,18 @@ json decode_dict(const std::string &encoded_value, int &id)
     id++;
     json result = json::object();
 
-    while ( encoded_value[id] != 'e')
+    while (encoded_value[id] != 'e')
     {
-        json key = decode_bencoded_value(encoded_value ,  id );
+        json key = decode_bencoded_value(encoded_value, id);
         // id is a reference , it will be updated with calls
-        json value = decode_bencoded_value(encoded_value , id);
+        json value = decode_bencoded_value(encoded_value, id);
         result[key.get<std::string>()] = value;
     }
-    id ++;
+    id++;
     return result;
 }
 
-json decode_list( const std::string &encoded_value, int &id )
+json decode_list(const std::string &encoded_value, int &id)
 {
     id++;
     json result = json::array();
@@ -53,7 +54,7 @@ json decode_list( const std::string &encoded_value, int &id )
     return result;
 }
 
-json decode_str(const std::string &encoded_value, int &id )
+json decode_str(const std::string &encoded_value, int &id)
 {
     std::string result;
     while (isdigit(encoded_value[id]))
@@ -75,28 +76,130 @@ json decode_str(const std::string &encoded_value, int &id )
 json decode_bencoded_value(const std::string &encoded_value, int &id)
 {
 
-    if (encoded_value[id] == 'i')
+    char first_char = encoded_value[id];
+
+    switch (first_char)
     {
+    case 'i':
         return decode_int(encoded_value, id);
-    }
-    else if (encoded_value[id] == 'd')
-    {
+    case 'd':
         return decode_dict(encoded_value, id);
-    }
-    else if (encoded_value[id] == 'l')
-    {
+    case 'l':
         return decode_list(encoded_value, id);
-    }
-    else if (isdigit(encoded_value[id]))
-    {
-        return decode_str(encoded_value, id);
-    }
-    else
-    {
-        throw std::runtime_error("Invalid encoded value: " + encoded_value + " at index: " + std::to_string(id));
+    default:
+        if (isdigit(first_char))
+        {
+            return decode_str(encoded_value, id);
+        }
+        else
+        {
+            throw std::runtime_error("Invalid encoded value: " + encoded_value + " at index: " + std::to_string(id));
+        }
     }
 }
 
+std::string read_file(const std::string &filePath)
+{
+    std::ifstream file(filePath, std::ios::binary);
+
+    if (!std::filesystem::exists(filePath))
+    {
+        throw std::runtime_error("File does not exist:" + filePath);
+    }
+
+    if (!file.is_open())
+    {
+        throw std::runtime_error("Could not open file : " + filePath);
+    }
+
+    std::string encode_file_content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+
+    if (file.fail() && !file.eof())
+    {
+        throw std::runtime_error("Failed to read the file :" + filePath);
+    }
+
+    return encode_file_content;
+}
+
+std::string json_to_bencode(json& decoded_json)
+{
+    // the json is is still a reference but i will not edit it
+    std::string result;
+
+    if (decoded_json.is_array())
+    {
+        result += 'l';
+        for (const json& item : decoded_json) {
+            result += item;
+        }
+        result += 'e';
+    }
+    else if ( decoded_json.is_object())
+    {
+        result += 'd';
+        for ( auto& el : decoded_json.items() )
+        {
+            result += (
+                std::to_string(el.key().size())
+                +
+                ':'
+                +
+                el.key()
+                +
+                json_to_bencode(el.value())
+                );
+        }
+        result += 'e';
+    }
+
+    else if ( decoded_json.is_number_integer())
+    {
+        result += (
+            'i'
+            +
+            std::to_string(decoded_json.get<int>())
+            +
+            'e'
+        );
+    }
+    else if ( decoded_json.is_string())
+    {
+        const std::string& value = decoded_json.get<std::string>();
+        result += (
+            std::to_string(value.size())
+            +
+            ':'
+            +
+            value
+        );
+    }
+    return result;
+}
+
+void parse_torrent(const std::string& file_path)
+{
+    int id = 0;
+
+    std::string encoded_content = read_file(file_path);
+    // extract the info
+    json decoded_content = decode_bencoded_value(encoded_content , id);
+    // becode the info dict
+    std::string bencoded_info = json_to_bencode(decoded_content["info"]);
+    // calc the sha-1 of the becoded info
+    SHA1 checksum;
+    checksum.update(bencoded_info );
+    const std:: string hash = checksum.final();
+
+
+
+    std::cout<<"Tracker URL: "<< decoded_content["announce"] << std::endl;
+    std::cout<<"Length: "<< decoded_content["info"]["length"] << std::endl;
+    std::cout << "Info SHA-1 Hash :  " << hash << std::endl;
+
+
+
+}
 
 int main(int argc, char *argv[])
 {
@@ -128,38 +231,15 @@ int main(int argc, char *argv[])
         json decoded_value;
         int id = 0;
 
-        decoded_value = decode_bencoded_value(encoded_value , id );
+        decoded_value = decode_bencoded_value(encoded_value, id);
 
         std::cout << decoded_value.dump() << std::endl;
     }
     else if (command == "info")
     {
         std::string filePath = argv[2];
-        std::ifstream file(filePath, std::ios::binary);
 
-        if (!std::filesystem::exists(filePath)) {
-            std::cerr << "File does not exist: " << filePath << '\n';
-            return 1;
-        }
-
-
-        if (!file.is_open()) {
-            std::cerr << "Error: Could not open file " << filePath << '\n';
-            return 1;
-        }
-
-        std::string encode_file_content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-
-        if (file.fail() && !file.eof()) {
-            std::cerr << "Error: Failed to read the file " << filePath << '\n';
-            return 1;
-        }
-
-        int id = 0;
-
-        json decoded_value = decode_bencoded_value(encode_file_content , id);
-        std::cout << "Tracker URL: " << decoded_value["announce"].get<std::string>() << std::endl;
-        std::cout << "Length: " << decoded_value["info"]["length"].get<int>() << std::endl;
+        parse_torrent(filePath);
     }
     else
     {
