@@ -7,7 +7,7 @@
 #include <vector>
 
 #include "lib/nlohmann/json.hpp"
-#include "lib/sha1.hpp"
+#include "lib/sha1.h"
 
 using json = nlohmann::json;
 
@@ -197,6 +197,22 @@ void parse_torrent(const std::string& file_path)
     std::cout<<"Length: "<< decoded_content["info"]["length"] << std::endl;
     std::cout << "Info SHA-1 Hash :  " << hash << std::endl;
 
+    std::cout << "Pieces : " << std::endl;
+
+    std::string pieces = decoded_content["info"]["pieces"];
+
+    for (std::size_t i = 0 ; i < pieces.length() ; i += 20 )
+    {
+        std::string piece = pieces.substr(i , 20);
+
+        std::stringstream str_stream;
+
+        for ( unsigned char byte : piece)
+        {
+            str_stream << std::hex << std::setw(2) << std::setfill('0') << (int)byte;
+        }
+        std::cout << str_stream.str() << std::endl;
+    }
 
 
 }
