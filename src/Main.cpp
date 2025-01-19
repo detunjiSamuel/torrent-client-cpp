@@ -8,6 +8,7 @@
 
 #include "lib/nlohmann/json.hpp"
 #include "lib/sha1.h"
+#include "lib/peers/PeerDiscovery.h"
 
 using json = nlohmann::json;
 
@@ -195,7 +196,7 @@ void parse_torrent(const std::string& file_path)
 
     std::cout<<"Tracker URL: "<< decoded_content["announce"] << std::endl;
     std::cout<<"Length: "<< decoded_content["info"]["length"] << std::endl;
-    std::cout << "Info SHA-1 Hash :  " << hash << std::endl;
+    std::cout << "Info SHA-1 Hash:" << hash << std::endl;
 
     std::cout << "Pieces : " << std::endl;
 
@@ -251,11 +252,25 @@ int main(int argc, char *argv[])
 
         std::cout << decoded_value.dump() << std::endl;
     }
-    else if (command == "info")
-    {
-        std::string filePath = argv[2];
+    // else if (command == "info")
+    // {
+    //     std::string filePath = argv[2];
+    //
+    //     parse_torrent(filePath);
+    // }
+    else if ( command == "info") {
 
-        parse_torrent(filePath);
+      const std::string tracker = "http://bittorrent-test-tracker.codecrafters.io/announce";
+      const std::string hash = "d69f91e6b2ae4c542468d1073a71d4ea13879a7f";
+      const std::string file_length = "92063";
+
+      std::vector<std::string> tracker_peers = peers::get_pairs(
+        tracker,
+        hash,
+        file_length
+        );
+
+      return 1;
     }
     else
     {

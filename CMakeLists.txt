@@ -7,4 +7,8 @@ file(GLOB_RECURSE SOURCE_FILES src/*.cpp src/*.hpp)
 set(CMAKE_CXX_STANDARD 23) # Enable the C++23 standard
 
 add_executable(bittorrent ${SOURCE_FILES}
-        src/lib/sha1.h)
+        src/lib/sha1.h
+        src/lib/peers/PeerDiscovery.cpp
+        src/lib/peers/PeerDiscovery.h
+        src/lib/http/httplib.h
+)
