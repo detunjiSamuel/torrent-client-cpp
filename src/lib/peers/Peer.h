@@ -6,6 +6,9 @@
 #define PEER_H
 #include <string>
 
+
+//TODO: include ipaddress validation against inet_pton
+
 class Peer {
 
   private:
