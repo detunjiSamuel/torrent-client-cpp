@@ -11,4 +11,8 @@ add_executable(bittorrent ${SOURCE_FILES}
         src/lib/peers/PeerDiscovery.cpp
         src/lib/peers/PeerDiscovery.h
         src/lib/http/httplib.h
+        src/lib/bencode/bencode.cpp
+        src/lib/bencode/bencode.h
+        src/lib/peers/Peer.cpp
+        src/lib/peers/Peer.h
 )
