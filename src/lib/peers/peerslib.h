@@ -5,16 +5,19 @@
 #ifndef PEERDISCOVERY_H
 #define PEERDISCOVERY_H
 #include <vector>
-
+#include "../tcp/tcplib.h"
 #include "Peer.h"
+#include "../torrent/torrent.h"
+
 
 namespace peers {
 
-std::vector<Peer> get_pairs(const std::string &tracker_url,
-                                   const std::string &info_hash,
-                                   const std::string &length);
+std::vector<Peer> get_pairs(TorrentFile torrentFile);
 
-void handshake_pair(Peer peer , std::string &info_hash);
+TcpConnection handshake_pair(Peer peer, std::string &info_hash,
+                             bool should_close_connection = true
+                             );
+void download_piece(Peer peer , TorrentFile torrent);
 }
 
 #endif  // PEERDISCOVERY_H

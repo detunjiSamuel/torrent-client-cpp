@@ -7,7 +7,6 @@
 #include "../bencode/bencode.h"
 #include "../http/httplib.h"
 #include "../nlohmann/json.hpp"
-#include "../tcp/tcplib.h"
 #include "Peer.h"
 #include "sstream"
 
@@ -49,21 +48,20 @@ std::array<char, 68> get_peer_handshake_message(std::string &info_hash) {
 
   message[0] = 19;  // 1 byte
 
-  const char* protocol = "BitTorrent protocol";  // 19 bytes
+  const char *protocol = "BitTorrent protocol";  // 19 bytes
   std::copy_n(protocol, 19, message.begin() + 1);
 
   std::fill_n(message.begin() + 20, 8, '\0');  // 8 bytes
 
-  std::copy_n(info_hash.data() , 20 , message.begin() + 28 ); // 20 bytes
+  std::copy_n(info_hash.data(), 20, message.begin() + 28);  // 20 bytes
 
-  for (size_t i = 0 ;  i < 20 ; i++) {
+  for (size_t i = 0; i < 20; i++) {
     message[i + 48] = static_cast<uint8_t>(rand());
   }
   return message;
 }
-}  // namespace
 
-std::string encode_info_hash_url(const std::string &hash) {
+std::string url_encode(const std::string &hash) {
   // hash is a 40 byte long
   // hex representation we need is 20 byte
   // we know that a pair of 2 characters represents 1 byte
@@ -73,7 +71,6 @@ std::string encode_info_hash_url(const std::string &hash) {
     result << '%' << hash.substr(i, 2);
   }
   return result.str();
-
 }
 
 std::string hex_encode_info_hash(const std::string &hash) {
@@ -99,11 +96,29 @@ std::tuple<std::string, std::string> split_endpoint_url(
                          tracker_url.substr(idx, tracker_url.size() - idx));
 }
 
-std::vector<Peer> get_pairs(const std::string &tracker_url,
-                            const std::string &info_hash,
-                            const std::string &length) {
+void wait_for_bitfield(const TcpConnection &conn) {
+  while (true) {
+    std::cout << "Awaiting Bitfield..." << std::endl;
+    auto buffer = conn.receiveData();
+    if (buffer.size() > 0) {
+      std::stringstream ss;
+
+      for (auto &it : buffer) ss << static_cast<int>(it);
+
+      std::cout << ss.str() << std::endl;
+      break;
+    }
+  }
+}
+
+void send_interested(const TcpConnection &conn) {
+}
+
+}  // namespace
+
+std::vector<Peer> get_pairs(TorrentFile torrentFile) {
   std::vector<std::string> result;
-  auto [base_url, route] = split_endpoint_url(tracker_url);
+  auto [base_url, route] = split_endpoint_url(torrentFile.trackerUrl);
 
   httplib::Params params{
       {"peer_id", "k4t9b0d7w2r5y8v1m6qz"},  // just random key of len 20
@@ -112,45 +127,42 @@ std::vector<Peer> get_pairs(const std::string &tracker_url,
       {"downloaded", "0"},
       {"compact", "1"}};
 
-  params.emplace("left", length);
+  params.emplace("left", std::to_string(torrentFile.length));
 
   httplib::Headers headers{};
-
   httplib::Client cli(base_url);
 
-  auto res = cli.Get(route + "?info_hash=" + encode_info_hash_url(info_hash),
+  auto res = cli.Get(route + "?info_hash=" + url_encode(torrentFile.infoHash),
                      params, headers);
 
   std::cout << "Response status:" << res->status << std::endl;
-  std::cout << "Response body:" << res->body << std::endl;
 
-  if (res->status == httplib::StatusCode::OK_200) {
-    std::string response_body = res->body;
+  if (res->status != httplib::StatusCode::OK_200)
+    throw std::runtime_error("HTTP error:" + to_string(res.error()));
 
-    // response body  is benconded dictionary
-    json decoded_body = bencode::decode(response_body);
+  std::string response_body = res->body;
 
-    std::string received_peers = decoded_body["peers"];
+  // response body  is benconded dictionary
+  json decoded_body = bencode::decode(response_body);
 
-    std::vector<Peer> peers = decode_pairs(received_peers);
+  std::string received_peers = decoded_body["peers"];
 
-    return peers;
-  } else {
-    auto err = res.error();
-    throw std::runtime_error("HTTP error:" + to_string(err));
-  }
+  std::vector<Peer> peers = decode_pairs(received_peers);
+
+  return peers;
 }
-void handshake_pair(Peer peer , std::string &info_hash) {
-
+TcpConnection handshake_pair(Peer peer, std::string &info_hash,
+                             bool should_close_connection) {
   std::string encoded_hash = hex_encode_info_hash(info_hash);
 
-  std::array<char , 68> handshake_message = get_peer_handshake_message(encoded_hash);
+  std::array<char, 68> handshake_message =
+      get_peer_handshake_message(encoded_hash);
 
   // create Tcp connection
-  TcpConnection conn = TcpConnection(peer.getIp() , peer.getPort());
+  TcpConnection conn = TcpConnection(peer.getIp(), peer.getPort());
 
   // send bytes
-  conn.sendData(handshake_message.data() , 68);
+  conn.sendData(handshake_message.data(), 68);
 
   // receive result
   auto buffer = conn.receiveData();
@@ -162,8 +174,43 @@ void handshake_pair(Peer peer , std::string &info_hash) {
   for (size_t i = 0; i < 20; ++i)
     ss << std::setw(2) << std::setfill('0') << static_cast<int>(buffer[48 + i]);
 
-  std::cout << ss.str( ) <<std::endl;
+  std::cout << ss.str() << std::endl;
 
-  conn.closeConnection();
+  if (should_close_connection) conn.closeConnection();
+
+  return conn;
 }
+
+void download_piece(Peer peer, TorrentFile torrent) {
+  // continue from handshake
+  TcpConnection conn = handshake_pair(peer, torrent.infoHash, false);
+
+  // peermessage : <message_length>(4)<message_id>(1)<payload>()
+
+  // wait for bitfield message - id= 5
+  // indicates which pieces it has
+  wait_for_bitfield(conn);
+
+  // send "interested" message
+  // message id= 2
+  // empty payload
+  send_interested(conn);
+
+  // wait until receive unchoke message -id= 1
+  // empty payload
+  // wait_for_unchoke(conn);
+
+  // break pieces into 16 kiB (16 * 1024 bytes) blocks
+  // and send request message for each id=6
+  // payload should contain : index( index of piece), begin(index offset in
+  // actual byte of piece)
+  // and lenght of block in bytes
+
+  // wait for a piece message for each block
+  // message id=7
+  // payload contains : index , begin , block(data of the piece)
+
+  // check integretity by comparing its hash with the hash value of piece in
+}
+
 }  // namespace peers

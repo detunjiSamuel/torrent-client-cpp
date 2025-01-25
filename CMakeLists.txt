@@ -17,4 +17,6 @@ add_executable(bittorrent ${SOURCE_FILES}
         src/lib/peers/Peer.h
         src/lib/tcp/tcplib.cpp
         src/lib/tcp/tcplib.h
+        src/lib/torrent/torrent.cpp
+        src/lib/torrent/torrent.h
 )
