@@ -112,6 +112,92 @@ void wait_for_bitfield(const TcpConnection &conn) {
 }
 
 void send_interested(const TcpConnection &conn) {
+  std::cout << "Sending interested ... " << std::endl;
+
+  constexpr std::uint32_t msg_length = htonl(1);  // 32bits integer =  4 bytes
+  constexpr std::uint8_t message_id = 2;          // 2="interested"
+
+  char data[5];
+  std::memcpy(data, &msg_length, sizeof(msg_length));
+  data[4] = message_id;
+
+  conn.sendData(data, sizeof(data));
+}
+
+void wait_for_unchoke(const TcpConnection &conn) {
+  constexpr int meesage_id = 1;  // 1 ="unchoke"
+  while (true) {
+    std::cout << "waiting for unchoke ... " << std::endl;
+
+    auto receivedBytes = conn.receiveData(5);
+    // we know that the format is size(4 bytes) , message_id(1 bytes) & payload
+    // it means i can just keep pull 5 bytes from the tcp buffer and check the
+    // last value for the message if i am looking for
+
+    if ( receivedBytes.size() > 0) {
+      std::stringstream ss;
+
+      for (auto &it : receivedBytes) {
+        ss << static_cast<int>(it);
+      }
+
+      std::cout << "recived bytes:" << ss.str() << std::endl;
+
+    }
+
+
+    if (receivedBytes.size() == 5) {
+      if (static_cast<int>(receivedBytes[4]) == meesage_id) break;
+    }
+  }
+}
+std::vector<char> get_piece_block(
+const TcpConnection &conn ,
+  std::uint32_t piece_index ,
+  std::uint32_t piece_offset ,
+  std::uint32_t block_length) {
+
+
+  constexpr  std::uint32_t msg_length = htonl(13);
+  constexpr  std::uint8_t message_id = 6; // id= request
+
+  char data[17];
+
+  std::memcpy(data ,  &msg_length ,  sizeof(msg_length));
+  data[4] = message_id; // 1byte
+
+  piece_index = htonl(piece_index);
+  piece_offset = htonl(piece_offset);
+  block_length =  htonl(block_length);
+
+  //32bits = 4 bytes
+  std::memcpy(data + 5 , &piece_index ,  sizeof(piece_index));
+  std::memcpy(data + 9 , &piece_offset  ,  sizeof(piece_offset ));
+  std::memcpy(data + 13 , &block_length  ,  sizeof(block_length));
+
+  conn.sendData(data ,  sizeof(data));
+
+  auto length_buffer = conn.receiveData(4);
+  int message_length = ntohl(*reinterpret_cast<int*>(length_buffer.data()));
+
+  auto message_id_buffer = conn.receiveData(1);
+  if (message_id_buffer[0] != 7) {
+    throw std::runtime_error("Expected piece message (id=7)");
+  }
+
+  std::vector<char> piece_data = conn.receiveData(message_length - 1);
+
+
+  std::cout << "bytes received " << piece_data.size() << std::endl;
+
+  std::stringstream ss;
+
+  for (size_t i = 0 ; i < 20 ;  i++)
+    ss << static_cast<int> (piece_data[i]);
+
+  std::cout << ss.str() << std::endl ;
+
+  return piece_data;
 }
 
 }  // namespace
@@ -181,6 +267,9 @@ TcpConnection handshake_pair(Peer peer, std::string &info_hash,
   return conn;
 }
 
+
+
+
 void download_piece(Peer peer, TorrentFile torrent) {
   // continue from handshake
   TcpConnection conn = handshake_pair(peer, torrent.infoHash, false);
@@ -198,7 +287,9 @@ void download_piece(Peer peer, TorrentFile torrent) {
 
   // wait until receive unchoke message -id= 1
   // empty payload
-  // wait_for_unchoke(conn);
+  wait_for_unchoke(conn);
+
+  std::cout << "received unchoke" << std::endl;
 
   // break pieces into 16 kiB (16 * 1024 bytes) blocks
   // and send request message for each id=6
@@ -206,11 +297,47 @@ void download_piece(Peer peer, TorrentFile torrent) {
   // actual byte of piece)
   // and lenght of block in bytes
 
+  torrent.printInfo();
+
+  constexpr uint32_t block_length = 16 * 1024;  // 16Kib
+
+  const size_t n_pieces = ( torrent.length + torrent.pieceLength - 1 ) / torrent.pieceLength;
+
+  for (size_t i = 1 ;  i < n_pieces; i++) {
+
+    uint32_t offset =  0 ;
+    uint32_t remaining = torrent.pieceLength;
+
+    std::vector<char> piece_data;
+
+    while (remaining > 0) {
+
+      uint32_t length = std::min(remaining, block_length);
+      std::cout  << "length"<< length << std::endl;
+      std::cout  << "offset" << offset << std::endl;
+      auto piece_block = get_piece_block(
+        conn,
+        i,
+        offset,
+        length
+      );
+
+      piece_data.insert(piece_data.end(), piece_block.begin(), piece_block.end());
+      offset += length;
+      remaining -= length;
+    }
+
+    std::cout << "completed idx" << std::endl;
+    std::cout << piece_data.size() << std::endl;
+    break; // only want to handle one piece for now
+  }
+
   // wait for a piece message for each block
   // message id=7
   // payload contains : index , begin , block(data of the piece)
 
   // check integretity by comparing its hash with the hash value of piece in
+  conn.closeConnection();
 }
 
 }  // namespace peers
